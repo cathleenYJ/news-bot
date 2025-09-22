@@ -1,0 +1,6 @@
+requests
+summa
+feedparser
+flask
+line-bot-sdk
+python-dotenv
