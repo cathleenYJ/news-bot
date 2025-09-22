@@ -1,8 +1,12 @@
 flask
 python-dotenv
 requests
-newspaper3k
 summa
 feedparser
 line-bot-sdk
 deep-translator
+newspaper3k==0.2.8
+lxml
+lxml_html_clean
+nltk
+beautifulsoup4
