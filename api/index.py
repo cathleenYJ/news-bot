@@ -1,5 +1,4 @@
 import requests
-from newspaper import Article
 from summa import summarizer
 import feedparser
 from flask import Flask, request, abort
@@ -7,9 +6,9 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
-from deep_translator import GoogleTranslator
 import os
 from concurrent.futures import ThreadPoolExecutor
+import re
 
 # 載入環境變數
 load_dotenv()
@@ -23,37 +22,17 @@ CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-app = app
-
-if __name__ == "__main__":
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
-
-# 單例翻譯器
-translator = GoogleTranslator(source='auto', target='zh-TW')
-
 def process_article(article):
     try:
-        # Follow redirects for links
-        response = requests.get(article['url'], headers={'User-Agent': 'Mozilla/5.0'}, allow_redirects=True)
-        real_url = response.url
-        art = Article(real_url)
-        art.download()
-        art.parse()
-        if art.text.strip() == "":
+        summary = article.get('summary', '')
+        # Clean HTML tags
+        summary = re.sub(r'<[^>]+>', '', summary)
+        if summary.strip() == "":
             summary = "無法生成摘要"
         else:
-            summary = summarizer.summarize(art.text, ratio=0.2, words=50)
+            summary = summarizer.summarize(summary, ratio=0.2, words=50)
         
-        # 翻譯到中文
-        try:
-            translated_title = translator.translate(article['title'])
-            translated_summary = translator.translate(summary) if summary != "無法生成摘要" else summary
-        except:
-            translated_title = article['title']
-            translated_summary = summary
-        
-        news_item = f"📰 標題: {translated_title} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {translated_summary}\n"
+        news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {article['url']}\n📑 新聞摘要: {summary}\n"
         return news_item
     except Exception as e:
         return f"Error processing {article['url']}: {e}\n"
@@ -70,7 +49,8 @@ def get_intel_news():
         for entry in feed.entries[:5]:  # Get first 5 articles per source
             title = entry.title
             link = entry.link
-            articles.append({'title': title, 'url': link, 'source': source['name']})
+            summary = getattr(entry, 'summary', '')
+            articles.append({'title': title, 'url': link, 'source': source['name'], 'summary': summary})
 
     # 並行處理文章
     news_list = []
