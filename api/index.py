@@ -1,4 +1,5 @@
 import requests
+from newspaper import Article
 from summa import summarizer
 import feedparser
 from flask import Flask, request, abort
@@ -6,9 +7,9 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
+from deep_translator import GoogleTranslator
 import os
 from concurrent.futures import ThreadPoolExecutor
-import re
 
 # 載入環境變數
 load_dotenv()
@@ -22,17 +23,31 @@ CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
+# 單例翻譯器
+translator = GoogleTranslator(source='auto', target='zh-TW')
+
 def process_article(article):
     try:
-        summary = article.get('summary', '')
-        # Clean HTML tags
-        summary = re.sub(r'<[^>]+>', '', summary)
-        if summary.strip() == "":
+        # Follow redirects for links
+        response = requests.get(article['url'], headers={'User-Agent': 'Mozilla/5.0'}, allow_redirects=True)
+        real_url = response.url
+        art = Article(real_url)
+        art.download()
+        art.parse()
+        if art.text.strip() == "":
             summary = "無法生成摘要"
         else:
-            summary = summarizer.summarize(summary, ratio=0.2, words=50)
+            summary = summarizer.summarize(art.text, ratio=0.2, words=50)
         
-        news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {article['url']}\n📑 新聞摘要: {summary}\n"
+        # 翻譯到中文
+        try:
+            translated_title = translator.translate(article['title'])
+            translated_summary = translator.translate(summary) if summary != "無法生成摘要" else summary
+        except:
+            translated_title = article['title']
+            translated_summary = summary
+        
+        news_item = f"📰 標題: {translated_title} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {translated_summary}\n"
         return news_item
     except Exception as e:
         return f"Error processing {article['url']}: {e}\n"
@@ -49,8 +64,7 @@ def get_intel_news():
         for entry in feed.entries[:5]:  # Get first 5 articles per source
             title = entry.title
             link = entry.link
-            summary = getattr(entry, 'summary', '')
-            articles.append({'title': title, 'url': link, 'source': source['name'], 'summary': summary})
+            articles.append({'title': title, 'url': link, 'source': source['name']})
 
     # 並行處理文章
     news_list = []
