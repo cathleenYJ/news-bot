@@ -33,7 +33,11 @@ def process_article(article):
         if art.text.strip() == "":
             summary = "無法生成摘要"
         else:
-            summary = summarizer.summarize(art.text, ratio=0.2, words=50)
+            # 針對中文內容調整摘要參數
+            summary = summarizer.summarize(art.text, ratio=0.1, words=30)
+            # 如果摘要仍然太長，手動截斷到合理長度
+            if len(summary) > 150:
+                summary = summary[:150] + "..."
         
         news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {summary}\n"
         return news_item
