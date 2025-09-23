@@ -7,7 +7,6 @@ from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
-from deep_translator import GoogleTranslator
 import os
 from concurrent.futures import ThreadPoolExecutor
 
@@ -23,9 +22,6 @@ CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
 line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
 handler = WebhookHandler(CHANNEL_SECRET)
 
-# 單例翻譯器
-translator = GoogleTranslator(source='auto', target='zh-TW')
-
 def process_article(article):
     try:
         # Follow redirects for links
@@ -39,22 +35,14 @@ def process_article(article):
         else:
             summary = summarizer.summarize(art.text, ratio=0.2, words=50)
         
-        # 翻譯到中文
-        try:
-            translated_title = translator.translate(article['title'])
-            translated_summary = translator.translate(summary) if summary != "無法生成摘要" else summary
-        except:
-            translated_title = article['title']
-            translated_summary = summary
-        
-        news_item = f"📰 標題: {translated_title} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {translated_summary}\n"
+        news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {summary}\n"
         return news_item
     except Exception as e:
         return f"Error processing {article['url']}: {e}\n"
 
 def get_intel_news():
     sources = [
-        {'name': 'Intel', 'url': 'https://newsroom.intel.com/feed/'}
+        {'name': 'Intel', 'url': 'https://newsroom.intel.com/zh-tw/feed/'}
     ]
     
     articles = []
@@ -88,11 +76,30 @@ def callback():
 
 @handler.add(MessageEvent, message=TextMessage)
 def handle_message(event):
-    if event.message.text.lower() == "新聞":
+    user_message = event.message.text.lower()
+    keywords = ["gpu", "電腦", "ai", "workstation", "顯卡"]
+    
+    if user_message == "新聞":
         news_list = get_intel_news().split('\n\n')  # 分割成每則新聞
         for news_item in news_list:
             if news_item.strip():  # 確保不發送空訊息
                 line_bot_api.push_message(event.source.user_id, TextSendMessage(text=news_item.strip()))
+    elif any(keyword in user_message for keyword in keywords):
+        # 篩選包含關鍵字的新聞
+        news_list = get_intel_news().split('\n\n')
+        filtered_news = []
+        for news_item in news_list:
+            if news_item.strip() and any(keyword.lower() in news_item.lower() for keyword in keywords):
+                filtered_news.append(news_item.strip())
+        
+        if filtered_news:
+            for news_item in filtered_news:
+                line_bot_api.push_message(event.source.user_id, TextSendMessage(text=news_item))
+        else:
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="目前沒有找到相關關鍵字的新聞")
+            )
     else:
         line_bot_api.reply_message(
             event.reply_token,
