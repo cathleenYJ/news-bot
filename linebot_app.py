@@ -94,7 +94,7 @@ def handle_message(event):
     user_message = event.message.text.lower()
     keywords = ["gpu", "電腦", "ai", "workstation", "顯卡"]
     
-    if user_message == "新聞":
+    if user_message == "news":
         # 獲取所有新聞並篩選包含關鍵字的5篇
         all_news = get_intel_news()
         final_news = get_keyword_filtered_news(all_news, keywords, target_count=5)
@@ -116,6 +116,9 @@ def handle_message(event):
         for news_item in all_news:
             if news_item.strip() and any(keyword.lower() in news_item.lower() for keyword in keywords):
                 filtered_news.append(news_item.strip())
+                # 達到目標數量就停止
+                if len(filtered_news) >= 5:
+                    break
         
         if filtered_news:
             # 一篇一篇發送
@@ -129,7 +132,7 @@ def handle_message(event):
     else:
         line_bot_api.reply_message(
             event.reply_token,
-            TextSendMessage(text="請發送 '新聞' 來獲取最新包含關鍵字的 Intel 新聞，或發送關鍵字 (GPU、電腦、AI、workstation、顯卡) 來搜尋相關新聞")
+            TextSendMessage(text="請發送 'news' 來獲取最新包含關鍵字的 Intel 新聞，或發送關鍵字 (GPU、電腦、AI、workstation、顯卡) 來搜尋相關新聞")
         )
 
 if __name__ == "__main__":
