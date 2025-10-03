@@ -1,36 +1,27 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import requests
 from newspaper import Article
 from summa import summarizer
 import feedparser
-from flask import Flask, request, abort
-from linebot import LineBotApi, WebhookHandler
-from linebot.exceptions import InvalidSignatureError
-from linebot.models import MessageEvent, TextMessage, TextSendMessage
-from dotenv import load_dotenv
-import os
 from concurrent.futures import ThreadPoolExecutor
-import random
-
-# 載入環境變數
-load_dotenv()
-
-app = Flask(__name__)
-
-# Line Bot 配置
-CHANNEL_ACCESS_TOKEN = os.getenv('CHANNEL_ACCESS_TOKEN')
-CHANNEL_SECRET = os.getenv('CHANNEL_SECRET')
-
-line_bot_api = LineBotApi(CHANNEL_ACCESS_TOKEN)
-handler = WebhookHandler(CHANNEL_SECRET)
 
 def process_article(article):
     try:
+        print(f"正在處理文章: {article['title'][:50]}...")
         # Follow redirects for links
-        response = requests.get(article['url'], headers={'User-Agent': 'Mozilla/5.0'}, allow_redirects=True)
+        response = requests.get(article['url'], headers={'User-Agent': 'Mozilla/5.0'}, allow_redirects=True, timeout=15)
         real_url = response.url
         art = Article(real_url)
+
+        # 增加 newspaper3k 的超時時間
+        art.config.browser_user_agent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        art.config.request_timeout = 15  # 增加到 15 秒
+
         art.download()
         art.parse()
+
         if art.text.strip() == "":
             summary = "無法生成摘要"
         else:
@@ -39,11 +30,16 @@ def process_article(article):
             # 如果摘要仍然太長，手動截斷到合理長度
             if len(summary) > 150:
                 summary = summary[:150] + "..."
-        
+
         news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {summary}\n"
         return news_item
     except Exception as e:
-        return f"Error processing {article['url']}: {e}\n"
+        # 記錄詳細錯誤訊息
+        error_msg = f"Error processing {article['url']}: {str(e)}"
+        print(f"❌ 詳細錯誤: {error_msg}")
+        print(f"   文章來源: {article.get('source', 'Unknown')}")
+        print(f"   文章標題: {article.get('title', 'Unknown')[:50]}...")
+        return error_msg
 
 def scrape_amd_news():
     """使用 AMD API 獲取新聞（帶關鍵字搜尋）"""
@@ -152,10 +148,16 @@ def scrape_nvidia_news():
     
     return articles
 
-def get_intel_news(keywords=None, filter_at_source=True):
+def get_multi_source_news(keywords=None, filter_at_source=False):
     """獲取多來源新聞，可選擇在抓取階段進行關鍵字篩選"""
-    if keywords is None:
-        keywords = ["gpu", "電腦", "ai", "workstation", "顯卡"]
+    print("開始抓取多來源新聞...")
+    print("=" * 70)
+    if filter_at_source and keywords:
+        print(f"關鍵字篩選: {', '.join(keywords)}")
+        print("=" * 70)
+    else:
+        print("抓取所有文章（稍後進行關鍵字篩選）")
+        print("=" * 70)
     
     # RSS feed 來源
     rss_sources = [
@@ -167,9 +169,12 @@ def get_intel_news(keywords=None, filter_at_source=True):
     
     # 從 RSS feed 抓取
     for source in rss_sources:
+        print(f"\n📡 抓取來源 (RSS): {source['name']}")
+        print(f"   URL: {source['url']}")
         try:
             response = requests.get(source['url'], headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
             feed = feedparser.parse(response.text)
+            print(f"   ✅ 找到 {len(feed.entries)} 篇文章")
             
             if filter_at_source and keywords:
                 # 篩選包含關鍵字的文章
@@ -180,7 +185,7 @@ def get_intel_news(keywords=None, filter_at_source=True):
                     if any(keyword.lower() in title.lower() for keyword in keywords):
                         filtered_entries.append(entry)
                 
-                # 從篩選後的文章中取最多5篇
+                print(f"   🔍 關鍵字篩選後: {len(filtered_entries)} 篇文章")
                 entries_to_process = filtered_entries[:5]
             else:
                 # 不篩選，取前5篇
@@ -190,34 +195,63 @@ def get_intel_news(keywords=None, filter_at_source=True):
             for entry in entries_to_process:
                 title = entry.title
                 link = entry.link
+                print(f"   - {title[:60]}...")
                 articles.append({'title': title, 'url': link, 'source': source['name']})
         except Exception as e:
-            print(f"Error fetching from {source['name']}: {e}")
+            print(f"   ❌ 錯誤: {e}")
             continue
     
-    # 從網頁爬取 AMD 和 NVIDIA 新聞
+    # 從 API 獲取 AMD 新聞
+    print(f"\n🔌 API 獲取: AMD")
+    print(f"   API: Coveo Search API")
     try:
         amd_articles = scrape_amd_news()
-        articles.extend(amd_articles[:5])
+        if amd_articles:
+            print(f"   ✅ 找到 {len(amd_articles)} 篇文章")
+            for article in amd_articles[:5]:
+                print(f"   - {article['title'][:60]}...")
+                articles.append(article)
+        else:
+            print(f"   ⚠️  未找到文章")
     except Exception as e:
-        print(f"Error adding AMD articles: {e}")
+        print(f"   ❌ 錯誤: {e}")
     
+    # 從 API 獲取 NVIDIA 新聞
+    print(f"\n🔌 API 獲取: NVIDIA")
+    print(f"   API: WordPress REST API")
     try:
         nvidia_articles = scrape_nvidia_news()
-        articles.extend(nvidia_articles[:5])
+        if nvidia_articles:
+            print(f"   ✅ 找到 {len(nvidia_articles)} 篇文章")
+            for article in nvidia_articles[:5]:
+                print(f"   - {article['title'][:60]}...")
+                articles.append(article)
+        else:
+            print(f"   ⚠️  未找到文章")
     except Exception as e:
-        print(f"Error adding NVIDIA articles: {e}")
+        print(f"   ❌ 錯誤: {e}")
+
+    if not articles:
+        return "沒有找到任何文章"
+
+    print(f"\n{'=' * 70}")
+    print(f"總共收集到 {len(articles)} 篇文章，開始處理...")
+    print("=" * 70)
     
     # 並行處理文章
     news_list = []
-    with ThreadPoolExecutor(max_workers=10) as executor:
+    with ThreadPoolExecutor(max_workers=8) as executor:
         futures = [executor.submit(process_article, article) for article in articles]
-        for future in futures:
+        for i, future in enumerate(futures, 1):
             try:
                 news_item = future.result(timeout=30)
-                news_list.append(news_item)
+                if not news_item.startswith("Error"):
+                    news_list.append(news_item)
+                    print(f"✅ 完成 {i}/{len(articles)}")
+                else:
+                    print(f"⚠️  跳過 {i}/{len(articles)} (處理失敗)")
             except Exception as e:
-                print(f"Error processing article: {e}")
+                print(f"❌ 錯誤 {i}/{len(articles)}: {e}")
                 continue
 
     return news_list
@@ -279,60 +313,131 @@ def get_keyword_filtered_news(news_list, keywords, target_count=5, already_filte
 
     return selected_news
 
-@app.route("/callback", methods=['POST'])
-def callback():
-    signature = request.headers['X-Line-Signature']
-    body = request.get_data(as_text=True)
-    try:
-        handler.handle(body, signature)
-    except InvalidSignatureError:
-        abort(400)
-    return 'OK'
-
-@handler.add(MessageEvent, message=TextMessage)
-def handle_message(event):
-    user_message = event.message.text.lower()
+def test_keywords(news_list):
+    print("\n" + "=" * 70)
+    print("🔍 關鍵字篩選測試")
+    print("=" * 70)
     default_keywords = ["gpu", "電腦", "ai", "workstation", "顯卡"]
+    print(f"預設關鍵字: {', '.join(default_keywords)}\n")
 
-    if user_message == "news":
-        # 獲取所有新聞並篩選包含預設關鍵字的5篇（隨機，但確保每個來源至少一篇）
-        # RSS 來源已在抓取時進行關鍵字篩選
-        all_news = get_intel_news()
-        final_news = get_keyword_filtered_news(all_news, default_keywords, target_count=5, already_filtered=True)
+    # 測試預設關鍵字篩選（模擬輸入 "news"）
+    print("📝 測試預設關鍵字篩選（輸入 'news'）:")
+    filtered_news_default = get_keyword_filtered_news(news_list, default_keywords, target_count=5)
 
-        if final_news:
-            # 一篇一篇發送
-            for news_item in final_news:
-                line_bot_api.push_message(event.source.user_id, TextSendMessage(text=news_item))
-        else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="目前沒有找到包含關鍵字的新聞")
-            )
+    print(f"   ✅ 找到 {len(filtered_news_default)} 篇包含預設關鍵字的新聞（隨機5篇，確保每個來源至少一篇）")
 
+    # 測試自訂關鍵字篩選（模擬輸入單一關鍵字）
+    test_keywords = ["gpu", "ai", "nvidia", "intel"]
+    print("\n📝 測試自訂關鍵字篩選（輸入單一關鍵字）:")
+
+    for test_keyword in test_keywords:
+        filtered_news_custom = get_keyword_filtered_news(news_list, [test_keyword], target_count=5)
+        print(f"   🔍 關鍵字「{test_keyword}」: 找到 {len(filtered_news_custom)} 篇新聞（隨機5篇，確保每個來源至少一篇）")
+
+    # 顯示找到的新聞
+    if filtered_news_default:
+        print(f"\n✅ 預設關鍵字篩選結果（{len(filtered_news_default)} 篇）:\n")
+        for i, news in enumerate(filtered_news_default, 1):
+            print(f"\n【新聞 {i}】")
+            print("=" * 70)
+            print(news)
     else:
-        # 檢查用戶輸入是否是一個關鍵字（單詞）
-        user_keyword = user_message.strip()
-        if user_keyword and len(user_keyword.split()) == 1:  # 確保是單一關鍵字
-            # 根據用戶輸入的關鍵字查詢新聞（使用傳統篩選模式，因為是自訂關鍵字）
-            all_news = get_intel_news(keywords=[user_keyword], filter_at_source=False)  # 不使用來源層級篩選
-            final_news = get_keyword_filtered_news(all_news, [user_keyword], target_count=5, already_filtered=False)
+        print("\n❌ 沒有找到包含預設關鍵字的新聞")
 
-            if final_news:
-                # 一篇一篇發送
-                for news_item in final_news:
-                    line_bot_api.push_message(event.source.user_id, TextSendMessage(text=news_item))
-            else:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(f"目前沒有找到包含關鍵字「{user_keyword}」的新聞")
-                )
-        else:
-            line_bot_api.reply_message(
-                event.reply_token,
-                TextSendMessage(text="請發送 'news' 來獲取最新包含 GPU、電腦、AI、workstation、顯卡 關鍵字的隨機5篇新聞，或發送任何單一關鍵字來搜尋相關新聞")
-            )
+def test_source_level_filtering():
+    """測試來源層級關鍵字篩選"""
+    print("\n" + "=" * 70)
+    print("🔍 來源層級關鍵字篩選測試")
+    print("=" * 70)
+    
+    default_keywords = ["gpu", "電腦", "ai", "workstation", "顯卡"]
+    print(f"預設關鍵字: {', '.join(default_keywords)}")
+    print("（RSS 來源在抓取時就進行關鍵字篩選）")
+    print("=" * 70)
+    
+    # 使用來源層級篩選抓取新聞
+    filtered_news_list = get_multi_source_news(keywords=default_keywords, filter_at_source=True)
+    
+    if isinstance(filtered_news_list, str):
+        print(f"\n❌ 錯誤: {filtered_news_list}")
+        return
+    
+    print(f"\n{'=' * 70}")
+    print(f"📊 來源層級篩選統計")
+    print("=" * 70)
+    print(f"成功處理: {len(filtered_news_list)} 篇文章")
+    
+    # 統計各來源的文章數量
+    source_count = {}
+    for news_item in filtered_news_list:
+        if news_item.strip() and not news_item.startswith("Error"):
+            source_start = news_item.find("(來源: ") + 5
+            source_end = news_item.find(")", source_start)
+            if source_start > 4 and source_end > source_start:
+                source = news_item[source_start:source_end]
+                source_count[source] = source_count.get(source, 0) + 1
+    
+    print("各來源文章數量:")
+    for source, count in source_count.items():
+        print(f"   {source}: {count} 篇")
+    
+    # 應用最終選擇邏輯（隨機5篇，確保每個來源至少一篇）
+    final_selection = get_keyword_filtered_news(filtered_news_list, default_keywords, target_count=5, already_filtered=True)
+    
+    print(f"\n最終選擇: {len(final_selection)} 篇新聞")
+    if final_selection:
+        print("\n✅ 最終選擇結果:\n")
+        for i, news in enumerate(final_selection, 1):
+            print(f"\n【新聞 {i}】")
+            print("=" * 70)
+            print(news)
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    print("\n" + "🚀 多來源新聞爬取測試".center(70, "="))
+    print()
+    
+    # 測試傳統模式：抓取所有文章，然後進行關鍵字篩選
+    print("📋 測試模式 1: 傳統關鍵字篩選（抓取後篩選）")
+    news_list = get_multi_source_news(filter_at_source=False)
+    
+    if isinstance(news_list, str):
+        print(f"\n❌ 錯誤: {news_list}")
+    else:
+        print(f"\n{'=' * 70}")
+        print(f"📊 抓取統計")
+        print("=" * 70)
+        print(f"成功處理: {len(news_list)} 篇文章")
+        
+        # 測試關鍵字篩選
+        test_keywords(news_list)
+    
+    print("\n" + "🔄 切換到來源層級篩選測試".center(70, "-"))
+    
+    # 測試新模式：RSS 來源在抓取時就進行關鍵字篩選
+    test_source_level_filtering()
+    
+    print("\n" + "=" * 70)
+    print("✨ 測試完成！")
+    print("=" * 70)
+
+if __name__ == "__main__":
+    print("\n" + "🚀 多來源新聞爬取測試".center(70, "="))
+    print()
+    
+    # 測試新聞爬取
+    news_list = get_multi_source_news()
+    
+    if isinstance(news_list, str):
+        print(f"\n❌ 錯誤: {news_list}")
+    else:
+        print(f"\n{'=' * 70}")
+        print(f"📊 爬取統計")
+        print("=" * 70)
+        print(f"成功處理: {len(news_list)} 篇文章")
+        
+        # 測試關鍵字篩選
+        test_keywords(news_list)
+    
+    print("\n" + "=" * 70)
+    print("✨ 測試完成！")
+    print("=" * 70)
