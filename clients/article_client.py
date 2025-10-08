@@ -53,40 +53,72 @@ class ArticleClient(BaseAPIClient):
             return cached_result
 
         try:
-            response = self._make_request(url, headers={'User-Agent': DEFAULT_USER_AGENT}, allow_redirects=True, timeout=10)  # 減少請求超時
-            if response:
-                real_url = response.url
-                art = Article(real_url)
+            # 對不同網站使用不同的超時策略
+            if 'amd.com' in url:
+                request_timeout = 20  # AMD網站響應較慢，使用更長超時
+                newspaper_timeout = 15
+                max_retries = 1  # AMD網站重試1次
+            else:
+                request_timeout = 15
+                newspaper_timeout = 12
+                max_retries = 1
 
-                # 設置更短的超時時間
-                art.config.timeout = 8  # newspaper3k下載超時
-                art.download()
-                art.parse()
+            last_exception = None
 
-                # 清理不需要的數據以節省內存
-                if hasattr(art, 'html'):
-                    art.html = None
+            # 實現重試機制
+            for attempt in range(max_retries + 1):
+                try:
+                    response = self._make_request(url, headers={'User-Agent': DEFAULT_USER_AGENT}, allow_redirects=True, timeout=request_timeout)
+                    if response:
+                        real_url = response.url
+                        art = Article(real_url)
 
-                if art.text.strip() == "":
-                    summary = "無法生成摘要"
-                else:
-                    # 優化摘要生成：減少文本長度和參數以提升速度
-                    text_to_summarize = art.text[:8000]  # 減少到8000字符
-                    summary = summarizer.summarize(text_to_summarize, ratio=0.15, words=25)  # 增加ratio，減少words以加快處理
-                    if len(summary) > 120:  # 減少摘要長度
-                        summary = summary[:120] + "..."
+                        # 設置對應的超時時間
+                        art.config.timeout = newspaper_timeout
+                        art.download()
+                        art.parse()
 
-                news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {summary}\n"
+                        # 清理不需要的數據以節省內存
+                        if hasattr(art, 'html'):
+                            art.html = None
 
-                # 存儲到緩存
-                self._cache[cache_key] = (time.time(), news_item)
+                        if art.text.strip() == "":
+                            summary = "無法生成摘要"
+                        else:
+                            # 優化摘要生成：減少文本長度和參數以提升速度
+                            text_to_summarize = art.text[:8000]  # 減少到8000字符
+                            summary = summarizer.summarize(text_to_summarize, ratio=0.15, words=25)  # 增加ratio，減少words以加快處理
+                            if len(summary) > 120:  # 減少摘要長度
+                                summary = summary[:120] + "..."
 
-                return news_item
+                        news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {summary}\n"
+
+                        # 存儲到緩存
+                        self._cache[cache_key] = (time.time(), news_item)
+
+                        return news_item
+
+                except Exception as e:
+                    last_exception = e
+                    if attempt < max_retries:
+                        print(f"處理文章失敗，重試 {attempt + 1}/{max_retries}: {url}")
+                        import time
+                        time.sleep(1)  # 重試前等待1秒
+                    else:
+                        # 所有重試都失敗了，返回標題和連結
+                        print(f"處理文章最終失敗，返回標題和連結: {url}")
+                        basic_info = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {url}\n\n"
+                        # 緩存基本信息，避免重複處理
+                        self._cache[cache_key] = (time.time(), basic_info)
+                        return basic_info
+
         except Exception as e:
-            error_msg = f"Error processing {url}: {e}\n"
-            # 即使出錯也緩存，避免重複錯誤
-            self._cache[cache_key] = (time.time(), error_msg)
-            return error_msg
+            # 其他錯誤也返回標題和連結
+            print(f"處理文章時發生未預期錯誤，返回標題和連結: {url}")
+            basic_info = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {url}\n\n"
+            # 緩存基本信息，避免重複處理
+            self._cache[cache_key] = (time.time(), basic_info)
+            return basic_info
         finally:
             # 確保清理資源
             import gc
