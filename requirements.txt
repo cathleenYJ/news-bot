@@ -9,3 +9,4 @@ lxml
 lxml_html_clean
 nltk
 beautifulsoup4
+psutil

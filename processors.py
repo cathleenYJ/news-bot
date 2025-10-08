@@ -1,9 +1,18 @@
 from clients import AMDAPIClient, NvidiaAPIClient, RSSClient, ArticleClient
+import psutil
+import os
+from functools import lru_cache
+import time
 
 # 常量定義
 DEFAULT_KEYWORDS = ["gpu", "電腦", "ai", "workstation", "顯卡"]
 REQUEST_TIMEOUT = 15
 RSS_TIMEOUT = 10
+
+def get_memory_usage():
+    """獲取當前內存使用情況"""
+    process = psutil.Process(os.getpid())
+    return process.memory_info().rss / 1024 / 1024  # MB
 
 class NewsProcessor:
     """新聞處理器類別，負責所有新聞抓取和處理邏輯"""
@@ -28,6 +37,8 @@ class NewsProcessor:
 
     def get_intel_news(self, keywords=None, filter_at_source=True):
         """獲取多來源新聞，可選擇在抓取階段進行關鍵字篩選"""
+        print(f"開始獲取新聞，當前內存使用: {get_memory_usage():.1f} MB")
+
         if keywords is None:
             keywords = DEFAULT_KEYWORDS
 
@@ -42,34 +53,50 @@ class NewsProcessor:
         # 從 RSS feed 抓取
         rss_articles = self.rss_client.get_news(rss_sources, keywords, filter_at_source)
         articles.extend(rss_articles)
+        print(f"RSS 文章數: {len(rss_articles)}，總文章數: {len(articles)}")
 
         # 從網頁爬取 AMD 和 NVIDIA 新聞
         try:
             amd_articles = self.scrape_amd_news()
             articles.extend(amd_articles[:5])
+            print(f"AMD 文章數: {len(amd_articles[:5])}")
         except Exception as e:
             print(f"Error adding AMD articles: {e}")
 
         try:
             nvidia_articles = self.scrape_nvidia_news()
             articles.extend(nvidia_articles[:5])
+            print(f"NVIDIA 文章數: {len(nvidia_articles[:5])}")
         except Exception as e:
             print(f"Error adding NVIDIA articles: {e}")
 
-        # 並行處理文章
+        # 限制總文章數量，避免過度消耗內存
+        max_articles = 10  # 進一步減少到 10 篇
+        if len(articles) > max_articles:
+            articles = articles[:max_articles]
+            print(f"限制文章數量到 {max_articles} 篇")
+
+        print(f"最終處理文章數: {len(articles)}，內存使用: {get_memory_usage():.1f} MB")
+
+        # 減少並發數量，避免內存壓力
         news_list = []
         from concurrent.futures import ThreadPoolExecutor
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
+        # 根據文章數量動態調整並發數
+        max_workers = min(3, len(articles))  # 最多 3 個並發線程
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = [executor.submit(self.process_article, article) for article in articles]
             for future in futures:
                 try:
                     news_item = future.result(timeout=30)
-                    news_list.append(news_item)
+                    if news_item.strip():
+                        news_list.append(news_item)
                 except Exception as e:
                     print(f"Error processing article: {e}")
                     continue
 
+        print(f"處理完成，生成 {len(news_list)} 條新聞，內存使用: {get_memory_usage():.1f} MB")
         return news_list
 
     def get_keyword_filtered_news(self, news_list, keywords, target_count=5, already_filtered=False):
