@@ -3,9 +3,11 @@ import psutil
 import os
 from functools import lru_cache
 import time
+import feedparser
 
 # 常量定義
 DEFAULT_KEYWORDS = ["gpu", "電腦", "ai", "workstation", "顯卡"]
+DEFAULT_USER_AGENT = 'Mozilla/5.0'
 REQUEST_TIMEOUT = 15
 RSS_TIMEOUT = 10
 
@@ -36,11 +38,65 @@ class NewsProcessor:
         return self.nvidia_client.get_news()
 
     def get_intel_news(self, keywords=None, filter_at_source=True):
-        """獲取多來源新聞，可選擇在抓取階段進行關鍵字篩選"""
+        """獲取多來源新聞，為每個來源選擇1則最符合關鍵字且最新的新聞"""
         print(f"開始獲取新聞，當前內存使用: {get_memory_usage():.1f} MB")
 
-        if keywords is None:
+        if not keywords:
             keywords = DEFAULT_KEYWORDS
+
+        selected_news = []
+
+        # 並發獲取所有來源的新聞
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        def fetch_rss_source(source):
+            """獲取單個RSS來源的新聞"""
+            try:
+                rss_articles = self.rss_client.get_news([source], keywords, filter_at_source=True)
+                if rss_articles:
+                    return rss_articles[0]  # 取最新的1則
+                return None
+            except Exception as e:
+                print(f"Error fetching from {source['name']}: {e}")
+                return None
+
+        def fetch_amd_news():
+            """獲取AMD新聞"""
+            try:
+                amd_articles = self.scrape_amd_news()
+                matching_amd = [
+                    article for article in amd_articles
+                    if any(keyword.lower() in article.get('title', '').lower() for keyword in keywords)
+                ]
+                if matching_amd:
+                    return {
+                        'title': matching_amd[0]['title'],
+                        'url': matching_amd[0]['url'],
+                        'source': 'AMD'
+                    }
+                return None
+            except Exception as e:
+                print(f"Error processing AMD articles: {e}")
+                return None
+
+        def fetch_nvidia_news():
+            """獲取NVIDIA新聞"""
+            try:
+                nvidia_articles = self.scrape_nvidia_news()
+                matching_nvidia = [
+                    article for article in nvidia_articles
+                    if any(keyword.lower() in article.get('title', '').lower() for keyword in keywords)
+                ]
+                if matching_nvidia:
+                    return {
+                        'title': matching_nvidia[0]['title'],
+                        'url': matching_nvidia[0]['url'],
+                        'source': 'NVIDIA'
+                    }
+                return None
+            except Exception as e:
+                print(f"Error processing NVIDIA articles: {e}")
+                return None
 
         # RSS feed 來源
         rss_sources = [
@@ -48,49 +104,54 @@ class NewsProcessor:
             {'name': 'Tom\'s Hardware', 'url': 'https://www.tomshardware.com/feeds/all', 'type': 'rss'},
         ]
 
-        articles = []
+        # 並發執行所有來源的獲取任務
+        with ThreadPoolExecutor(max_workers=4) as executor:
+            # 提交所有任務
+            future_to_source = {}
 
-        # 從 RSS feed 抓取
-        rss_articles = self.rss_client.get_news(rss_sources, keywords, filter_at_source)
-        articles.extend(rss_articles)
-        print(f"RSS 文章數: {len(rss_articles)}，總文章數: {len(articles)}")
+            # RSS來源任務
+            for source in rss_sources:
+                future = executor.submit(fetch_rss_source, source)
+                future_to_source[future] = source['name']
 
-        # 從網頁爬取 AMD 和 NVIDIA 新聞
-        try:
-            amd_articles = self.scrape_amd_news()
-            articles.extend(amd_articles[:5])
-            print(f"AMD 文章數: {len(amd_articles[:5])}")
-        except Exception as e:
-            print(f"Error adding AMD articles: {e}")
+            # AMD任務
+            amd_future = executor.submit(fetch_amd_news)
+            future_to_source[amd_future] = 'AMD'
 
-        try:
-            nvidia_articles = self.scrape_nvidia_news()
-            articles.extend(nvidia_articles[:5])
-            print(f"NVIDIA 文章數: {len(nvidia_articles[:5])}")
-        except Exception as e:
-            print(f"Error adding NVIDIA articles: {e}")
+            # NVIDIA任務
+            nvidia_future = executor.submit(fetch_nvidia_news)
+            future_to_source[nvidia_future] = 'NVIDIA'
 
-        # 限制總文章數量，避免過度消耗內存
-        max_articles = 10  # 進一步減少到 10 篇
-        if len(articles) > max_articles:
-            articles = articles[:max_articles]
-            print(f"限制文章數量到 {max_articles} 篇")
+            # 收集結果
+            for future in as_completed(future_to_source):
+                source_name = future_to_source[future]
+                try:
+                    result = future.result(timeout=15)  # 15秒超時
+                    if result:
+                        selected_news.append(result)
+                        print(f"{source_name}: 找到 1 則符合關鍵字的新聞")
+                except Exception as e:
+                    print(f"Error getting result from {source_name}: {e}")
 
-        print(f"最終處理文章數: {len(articles)}，內存使用: {get_memory_usage():.1f} MB")
+        print(f"各來源篩選完成，共 {len(selected_news)} 篇文章")
 
-        # 減少並發數量，避免內存壓力
+        # 如果沒有文章，返回空列表
+        if not selected_news:
+            print("沒有找到符合條件的新聞")
+            return []
+
+        # 並行處理選定的文章 - 增加並發數並減少超時時間
         news_list = []
-        from concurrent.futures import ThreadPoolExecutor
 
-        # 根據文章數量動態調整並發數
-        max_workers = min(3, len(articles))  # 最多 3 個並發線程
+        # 增加並發數，減少超時時間以提升響應速度
+        max_workers = min(6, len(selected_news))  # 增加到6個並發線程
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = [executor.submit(self.process_article, article) for article in articles]
-            for future in futures:
+            futures = [executor.submit(self.process_article, article) for article in selected_news]
+            for future in as_completed(futures):
                 try:
-                    news_item = future.result(timeout=30)
-                    if news_item.strip():
+                    news_item = future.result(timeout=20)  # 減少到20秒超時
+                    if news_item and news_item.strip():
                         news_list.append(news_item)
                 except Exception as e:
                     print(f"Error processing article: {e}")
@@ -110,6 +171,8 @@ class NewsProcessor:
         """
         import random
 
+        print(f"開始關鍵字過濾，共 {len(news_list)} 條新聞，關鍵字: {keywords}")
+
         # 按來源分組新聞
         source_groups = {}
         for news_item in news_list:
@@ -124,6 +187,15 @@ class NewsProcessor:
                         if source not in source_groups:
                             source_groups[source] = []
                         source_groups[source].append(news_item.strip())
+                        print(f"  添加 {source} 新聞到組")
+                    else:
+                        print(f"  無法提取來源: {news_item[:100]}...")
+                else:
+                    print(f"  跳過不包含關鍵字的新聞: {news_item[:100]}...")
+            else:
+                print(f"  跳過無效新聞: {news_item[:50]}...")
+
+        print(f"來源分組結果: {dict((k, len(v)) for k, v in source_groups.items())}")
 
         # 確保每個來源至少有一篇
         selected_news = []

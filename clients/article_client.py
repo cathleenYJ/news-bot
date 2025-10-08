@@ -42,8 +42,8 @@ class ArticleClient(BaseAPIClient):
         url = article['url']
         cache_key = self._get_cache_key(url)
 
-        # 定期清理緩存
-        if len(self._cache) > 50:  # 當緩存項目超過 50 個時清理
+        # 增加緩存大小，減少清理頻率
+        if len(self._cache) > 100:  # 增加到100個項目
             self._cleanup_cache()
 
         # 檢查緩存
@@ -53,10 +53,13 @@ class ArticleClient(BaseAPIClient):
             return cached_result
 
         try:
-            response = self._make_request(url, headers={'User-Agent': DEFAULT_USER_AGENT}, allow_redirects=True)
+            response = self._make_request(url, headers={'User-Agent': DEFAULT_USER_AGENT}, allow_redirects=True, timeout=10)  # 減少請求超時
             if response:
                 real_url = response.url
                 art = Article(real_url)
+
+                # 設置更短的超時時間
+                art.config.timeout = 8  # newspaper3k下載超時
                 art.download()
                 art.parse()
 
@@ -67,11 +70,11 @@ class ArticleClient(BaseAPIClient):
                 if art.text.strip() == "":
                     summary = "無法生成摘要"
                 else:
-                    # 限制文本長度避免過度處理
-                    text_to_summarize = art.text[:10000]  # 限制處理前 10000 字符
-                    summary = summarizer.summarize(text_to_summarize, ratio=0.1, words=30)
-                    if len(summary) > 150:
-                        summary = summary[:150] + "..."
+                    # 優化摘要生成：減少文本長度和參數以提升速度
+                    text_to_summarize = art.text[:8000]  # 減少到8000字符
+                    summary = summarizer.summarize(text_to_summarize, ratio=0.15, words=25)  # 增加ratio，減少words以加快處理
+                    if len(summary) > 120:  # 減少摘要長度
+                        summary = summary[:120] + "..."
 
                 news_item = f"📰 標題: {article['title']} (來源: {article['source']})\n🔗 連結: {real_url}\n📑 新聞摘要: {summary}\n"
 

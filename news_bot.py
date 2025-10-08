@@ -55,10 +55,8 @@ def create_app():
         default_keywords = DEFAULT_KEYWORDS
 
         if user_message == "news":
-            # 獲取所有新聞並篩選包含預設關鍵字的5篇（隨機，但確保每個來源至少一篇）
-            # RSS 來源已在抓取時進行關鍵字篩選
-            all_news = news_processor.get_intel_news()
-            final_news = news_processor.get_keyword_filtered_news(all_news, default_keywords, target_count=5, already_filtered=True)
+            # 獲取每個來源1則最符合預設關鍵字的新聞（總共最多4篇）
+            final_news = news_processor.get_intel_news(keywords=default_keywords, filter_at_source=True)
 
             if final_news:
                 # 一篇一篇發送
@@ -74,9 +72,8 @@ def create_app():
             # 檢查用戶輸入是否是一個關鍵字（單詞）
             user_keyword = user_message.strip()
             if user_keyword and len(user_keyword.split()) == 1:  # 確保是單一關鍵字
-                # 根據用戶輸入的關鍵字查詢新聞（使用傳統篩選模式，因為是自訂關鍵字）
-                all_news = news_processor.get_intel_news(keywords=[user_keyword], filter_at_source=False)  # 不使用來源層級篩選
-                final_news = news_processor.get_keyword_filtered_news(all_news, [user_keyword], target_count=5, already_filtered=False)
+                # 根據用戶輸入的關鍵字查詢新聞，使用來源層級篩選
+                final_news = news_processor.get_intel_news(keywords=[user_keyword], filter_at_source=True)
 
                 if final_news:
                     # 一篇一篇發送
@@ -90,7 +87,7 @@ def create_app():
             else:
                 line_bot_api.reply_message(
                     event.reply_token,
-                    TextSendMessage(text="請發送 'news' 來獲取最新包含 GPU、電腦、AI、workstation、顯卡 關鍵字的隨機5篇新聞，或發送任何單一關鍵字來搜尋相關新聞")
+                    TextSendMessage(text="請發送 'news' 來獲取每個來源1則最相關的新聞，或發送任何單一關鍵字來搜尋相關新聞")
                 )
 
     return app
