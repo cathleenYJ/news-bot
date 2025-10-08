@@ -1,16 +1,9 @@
-import requests
-from newspaper import Article
-from summa import summarizer
-import feedparser
 from flask import Flask, request, abort
 from linebot import LineBotApi, WebhookHandler
 from linebot.exceptions import InvalidSignatureError
 from linebot.models import MessageEvent, TextMessage, TextSendMessage
 from dotenv import load_dotenv
 import os
-import re
-from concurrent.futures import ThreadPoolExecutor
-import random
 from processors import NewsProcessor
 from container import NewsBotContainer
 
@@ -55,6 +48,12 @@ def create_app():
         default_keywords = DEFAULT_KEYWORDS
 
         if user_message == "news":
+            # 先發送等待消息
+            line_bot_api.reply_message(
+                event.reply_token,
+                TextSendMessage(text="🔍 正在為您搜索最新的科技新聞，請稍等...")
+            )
+
             # 獲取每個來源1則最符合預設關鍵字的新聞（總共最多4篇）
             final_news = news_processor.get_intel_news(keywords=default_keywords, filter_at_source=True)
 
@@ -63,15 +62,18 @@ def create_app():
                 for news_item in final_news:
                     line_bot_api.push_message(event.source.user_id, TextSendMessage(text=news_item))
             else:
-                line_bot_api.reply_message(
-                    event.reply_token,
-                    TextSendMessage(text="目前沒有找到包含關鍵字的新聞")
-                )
+                line_bot_api.push_message(event.source.user_id, TextSendMessage(text="目前沒有找到包含關鍵字的新聞"))
 
         else:
             # 檢查用戶輸入是否是一個關鍵字（單詞）
             user_keyword = user_message.strip()
             if user_keyword and len(user_keyword.split()) == 1:  # 確保是單一關鍵字
+                # 先發送等待消息
+                line_bot_api.reply_message(
+                    event.reply_token,
+                    TextSendMessage(text=f"🔍 正在搜索包含「{user_keyword}」的相關新聞，請稍等...")
+                )
+
                 # 根據用戶輸入的關鍵字查詢新聞，使用來源層級篩選
                 final_news = news_processor.get_intel_news(keywords=[user_keyword], filter_at_source=True)
 
@@ -80,10 +82,7 @@ def create_app():
                     for news_item in final_news:
                         line_bot_api.push_message(event.source.user_id, TextSendMessage(text=news_item))
                 else:
-                    line_bot_api.reply_message(
-                        event.reply_token,
-                        TextSendMessage(f"目前沒有找到包含關鍵字「{user_keyword}」的新聞")
-                    )
+                    line_bot_api.push_message(event.source.user_id, TextSendMessage(f"目前沒有找到包含關鍵字「{user_keyword}」的新聞"))
             else:
                 line_bot_api.reply_message(
                     event.reply_token,

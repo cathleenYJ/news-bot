@@ -1,9 +1,6 @@
 from clients import AMDAPIClient, NvidiaAPIClient, RSSClient, ArticleClient
 import psutil
 import os
-from functools import lru_cache
-import time
-import feedparser
 
 # 常量定義
 DEFAULT_KEYWORDS = ["gpu", "電腦", "ai", "workstation", "顯卡"]
