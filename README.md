@@ -15,7 +15,7 @@
 - **後端框架**：Flask + Line Bot SDK
 - **新聞處理**：Newspaper3k + Summa (NLP 摘要)
 - **資料來源**：RSS Feed + REST API
-- **部署方式**：支援本地開發和雲端部署（Vercel/Heroku）
+- **部署方式**：支援本地開發和雲端部署（Cloud Run/Vercel/Heroku）
 
 ## 需求環境
 
@@ -72,6 +72,39 @@ heroku config:set CHANNEL_ACCESS_TOKEN=your_token
 heroku config:set CHANNEL_SECRET=your_secret
 heroku config:set PORT=5000
 ```
+
+#### Cloud Run 部署（推薦）
+
+1. **安裝並初始化 Google Cloud CLI**
+   ```bash
+   gcloud auth login
+   gcloud config set project <YOUR_GCP_PROJECT_ID>
+   gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
+   ```
+
+2. **部署到 Cloud Run（使用原始碼建置）**
+   ```bash
+   gcloud run deploy news-linebot \
+     --source . \
+     --region asia-east1 \
+     --allow-unauthenticated \
+     --set-env-vars CHANNEL_ACCESS_TOKEN=<YOUR_CHANNEL_ACCESS_TOKEN>,CHANNEL_SECRET=<YOUR_CHANNEL_SECRET>
+   ```
+
+3. **設定 Line Webhook URL**
+   - 部署完成後會得到服務網址，例如：`https://news-linebot-xxxx.a.run.app`
+   - 請在 LINE Developers Console 設定：
+     - Webhook URL = `https://news-linebot-xxxx.a.run.app/callback`
+
+4. **更新服務（重新部署）**
+   ```bash
+   gcloud run deploy news-linebot --source . --region asia-east1
+   ```
+
+5. **查看日誌**
+   ```bash
+   gcloud run services logs read news-linebot --region asia-east1
+   ```
 
 ### Line Bot 設定
 
